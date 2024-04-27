@@ -11,7 +11,7 @@ pub mod hpga3d;
 */
 pub mod pga3d;
 pub mod simd;
-pub mod polynomial;
+// pub mod polynomial;
 
 impl Zero for f32 {
     fn zero() -> Self {
@@ -146,6 +146,7 @@ impl Transformation<f32> for f32 {
     }
 }
 
+/*
 impl epga1d::ComplexNumber {
     pub fn real(self) -> f32 {
         self[0]
@@ -320,6 +321,7 @@ impl Powf for ppga3d::Motor {
         (self.ln() * exponent).exp()
     }
 }
+*/
 
 /// All elements set to `0.0`
 pub trait Zero {

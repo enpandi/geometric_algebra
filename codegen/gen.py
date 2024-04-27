@@ -18,17 +18,19 @@ match n:
         name = 'pga3d'
         descriptor = ';'.join([
             f'{name}:0,1,1,1',
-            'Point:e123,e230,e301,e012',
-            'IdealPoint:e230,e301,e012',
-            'Line:e01,e02,e03|e23,e31,e12',
             'Scalar:1',
-            #'Rotor:1,e23,-e13,e12',
+            'Point:e123,e023,e031,e012',
+            'Direction:e023,e031,e012',
+            'Line:e01,e02,e03|e23,e31,e12',
+            #'Forque:e01,e02,e03|e23,e31,e12',
+            'Plane:e0,e1,e2,e3',
+            'Rotor:1,e23,e31,e12',
             #'Point:e123,-e023,e013,-e012',
             #'IdealPoint:e01,e02,e03',
             #'Plane:e0,e1,e2,e3',
             #'Line:e01,e02,e03|e23,-e13,e12',
-            #'Translator:1,e01,e02,e03',
-            #'Motor:1,e23,-e13,e12|e0123,e01,e02,e03',
+            'Translator:1,e01,e02,e03',
+            'Motor:1,e23,e31,e12|e0123,e01,e02,e03',
         ])
     case 4:
         assert False
