@@ -1,17 +1,18 @@
-use std::io::Write;
+use crate::algebra::BasisElement;
 use crate::{
     ast::{AstNode, DataType, Expression, ExpressionContent},
-    emit::{camel_to_snake_case, emit_indentation},
+    emit::{camel_to_snake_case, emit_element_name, emit_indentation},
 };
-use crate::algebra::BasisElement;
+use std::io::Write;
 
 const COMPONENT: &[&str] = &["x", "y", "z", "w"];
 
 fn emit_data_type<W: std::io::Write>(collector: &mut W, data_type: &DataType) -> std::io::Result<()> {
     match data_type {
-        DataType::Integer => collector.write_all(b"int"),
+        DataType::Integer => collector.write_all(b"u32"),
         DataType::SimdVector(size) if *size == 1 => collector.write_all(b"f32"),
         DataType::SimdVector(size) => collector.write_fmt(format_args!("vec{}<f32>", *size)),
+        DataType::MultiVector(class) if class.is_scalar() => collector.write_all(b"f32"),
         DataType::MultiVector(class) => collector.write_fmt(format_args!("{}", class.class_name)),
     }
 }
@@ -45,7 +46,9 @@ fn emit_expression<W: std::io::Write>(collector: &mut W, expression: &Expression
                 }
                 ExpressionContent::InvokeClassMethod(class, method_name, _) => {
                     if *method_name == "Constructor" {
-                        collector.write_fmt(format_args!("{}", &class.class_name))?;
+                        if !class.is_scalar() {
+                            collector.write_fmt(format_args!("{}", &class.class_name))?;
+                        }
                     } else {
                         camel_to_snake_case(collector, &class.class_name)?;
                         collector.write_all(b"_")?;
@@ -72,17 +75,20 @@ fn emit_expression<W: std::io::Write>(collector: &mut W, expression: &Expression
             collector.write_all(b")")?;
         }
         ExpressionContent::Select(condition_expression, then_expression, else_expression) => {
-            collector.write_all(b"select(")?;
+            // collector.write_all(b"select(")?;
             emit_expression(collector, else_expression)?;
-            collector.write_all(b", ")?;
-            emit_expression(collector, then_expression)?;
-            collector.write_all(b", ")?;
-            emit_expression(collector, condition_expression)?;
-            collector.write_all(b")")?;
+            // collector.write_all(b", ")?;
+            // emit_expression(collector, then_expression)?;
+            // collector.write_all(b", ")?;
+            // emit_expression(collector, condition_expression)?;
+            // collector.write_all(b")")?;
+            // FIXME
         }
         ExpressionContent::Access(inner_expression, array_index) => {
             emit_expression(collector, inner_expression)?;
-            collector.write_fmt(format_args!(".g{}", array_index))?;
+            if !inner_expression.is_scalar() {
+                collector.write_fmt(format_args!(".g{}", array_index))?;
+            }
         }
         ExpressionContent::Swizzle(inner_expression, indices) => {
             emit_expression(collector, inner_expression)?;
@@ -101,9 +107,22 @@ fn emit_expression<W: std::io::Write>(collector: &mut W, expression: &Expression
                     collector.write_all(b", ")?;
                 }
                 emit_expression(collector, inner_expression)?;
-                collector.write_fmt(format_args!(".g{}", array_index))?;
-                if inner_expression.size > 1 {
-                    collector.write_fmt(format_args!(".{}", COMPONENT[*component_index]))?;
+                if !inner_expression.is_scalar() {
+                    collector.write_fmt(format_args!(".g{}", array_index))?;
+                    // if inner_expression.size > 1 {
+                    //     collector.write_fmt(format_args!(".{}", COMPONENT[*component_index]))?;
+                    // }
+                    if let Expression {
+                        content: ExpressionContent::Variable(DataType::MultiVector(crate::algebra::MultiVectorClass { grouped_basis, .. }, ..), _),
+                        ..
+                    } = inner_expression.as_ref()
+                    {
+                        if grouped_basis[*array_index].len() > 1 {
+                            collector.write_fmt(format_args!(".{}", COMPONENT[*component_index]))?;
+                        }
+                    } else {
+                        panic!();
+                    }
                 }
             }
             if expression.size > 1 {
@@ -167,6 +186,7 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
         AstNode::None => {}
         AstNode::Preamble => {}
         AstNode::ClassDefinition { class } => {
+            let mut simd_widths = Vec::new();
             collector.write_fmt(format_args!("struct {} {{\n", class.class_name))?;
             for (i, group) in class.grouped_basis.iter().enumerate() {
                 emit_indentation(collector, indentation + 1)?;
@@ -182,9 +202,54 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
                 collector.write_fmt(format_args!(" g{}: ", i))?;
                 emit_data_type(collector, &DataType::SimdVector(group.len()))?;
                 collector.write(b",\n");
+                simd_widths.push(if group.len() == 1 { 1 } else { 4 });
             }
             emit_indentation(collector, indentation)?;
-            collector.write_all(b"}\n\n")?;
+            collector.write_all(b"}\n")?;
+            {
+                collector.write_all(b"fn ");
+                camel_to_snake_case(collector, &class.class_name)?;
+                //TODO
+                collector.write_all(b"_new(")?;
+                let mut element_index = 0;
+                for group in class.grouped_basis.iter() {
+                    for element in group.iter() {
+                        if element_index > 0 {
+                            collector.write_all(b", ")?;
+                        }
+                        emit_element_name(collector, element)?;
+                        collector.write_all(b": f32")?;
+                        element_index += 1;
+                    }
+                }
+                collector.write_all(b") -> ");
+                collector.write_fmt(format_args!("{}", class.class_name))?;
+                collector.write_all(b" {\n")?;
+                emit_indentation(collector, indentation + 1)?;
+                collector.write_fmt(format_args!("return {}", class.class_name))?;
+                collector.write_all(b"(")?;
+                for (j, group) in class.grouped_basis.iter().enumerate() {
+                    element_index = 0;
+                    if group.len() > 1 {
+                        collector.write_fmt(format_args!("vec{}", group.len()));
+                    }
+                    collector.write_all(b"(")?;
+                    for element in group.iter() {
+                        if element_index > 0 {
+                            collector.write_all(b", ")?;
+                        }
+                        emit_element_name(collector, element)?;
+                        element_index += 1;
+                    }
+                    // for _ in group.len()..simd_widths[j] {
+                    //     collector.write_all(b", 0.0")?;
+                    // }
+                    collector.write_all(b"), ")?;
+                }
+                collector.write_all(b");\n")?;
+                emit_indentation(collector, indentation)?;
+                collector.write_all(b"}\n\n")?;
+            }
         }
         AstNode::ReturnStatement { expression } => {
             collector.write_all(b"return ")?;
@@ -246,15 +311,14 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
                 if i > 0 {
                     collector.write_all(b", ")?;
                 }
-                let parameter_name = if parameter.name == "self" { "self_" } else {
-                    parameter.name
-                };
+                let parameter_name = if parameter.name == "self" { "self_" } else { parameter.name };
                 collector.write_fmt(format_args!("{}", parameter_name))?;
                 collector.write_all(b": ")?;
                 emit_data_type(collector, &parameter.data_type)?;
             }
             collector.write_all(b") -> ")?;
-            collector.write_fmt(format_args!("{} ", result.multi_vector_class().class_name))?;
+            // collector.write_fmt(format_args!("{} ", result.multi_vector_class().class_name))?;
+            emit_data_type(collector, &result.data_type)?;
             collector.write_all(b" {\n")?;
             for statement in body.iter() {
                 emit_indentation(collector, indentation + 1)?;

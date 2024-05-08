@@ -10,6 +10,7 @@ pub mod ppga3d;
 pub mod hpga3d;
 */
 pub mod pga3d;
+pub mod pga4d;
 pub mod simd;
 // pub mod polynomial;
 

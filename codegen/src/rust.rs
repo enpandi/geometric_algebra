@@ -115,8 +115,16 @@ fn emit_expression<W: std::io::Write>(collector: &mut W, expression: &Expression
                     emit_expression(collector, inner_expression)?;
                     if !inner_expression.is_scalar() {
                         collector.write_fmt(format_args!(".group{}()", array_index))?;
-                        if inner_expression.size > 1 {
-                            collector.write_fmt(format_args!("[{}]", *component_index))?;
+                        if let Expression {
+                            content: ExpressionContent::Variable(DataType::MultiVector(crate::algebra::MultiVectorClass { grouped_basis, .. }, ..), _),
+                            ..
+                        } = inner_expression.as_ref()
+                        {
+                            if grouped_basis[*array_index].len() > 1 {
+                                collector.write_fmt(format_args!("[{}]", *component_index))?;
+                            }
+                        } else {
+                            panic!();
                         }
                     }
                 }
@@ -338,7 +346,7 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
             collector.write_all(b"}\n\n")?;
             emit_indentation(collector, indentation)?;
             collector.write_fmt(format_args!(
-                "const {}_INDEX_REMAP: [usize; {}] = [",
+                "pub const {}_INDEX_REMAP: [usize; {}] = [",
                 class.class_name.to_uppercase(),
                 element_count
             ))?;
@@ -386,7 +394,7 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
             collector.write_all(b"}\n\n")?;
             emit_indentation(collector, indentation)?;
             collector.write_fmt(format_args!(
-                "impl std::convert::From<{}> for [f32; {}] {{\n",
+                "impl From<{}> for [f32; {}] {{\n",
                 class.class_name, element_count
             ))?;
             emit_indentation(collector, indentation + 1)?;
@@ -406,7 +414,7 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
             collector.write_all(b"}\n\n")?;
             emit_indentation(collector, indentation)?;
             collector.write_fmt(format_args!(
-                "impl std::convert::From<[f32; {}]> for {} {{\n",
+                "impl From<[f32; {}]> for {} {{\n",
                 element_count, class.class_name
             ))?;
             emit_indentation(collector, indentation + 1)?;
@@ -494,14 +502,25 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
             {
                 return Ok(());
             }
-            collector.write_fmt(format_args!("impl {}", result.name))?;
+            // if result.name == "Dual" && parameters[0].data_type.is_scalar() { return Ok(()); }
+            let into_to_from = result.name == "Into" && !result.data_type.is_scalar();
+            let into_to_from = false;
+            collector.write_fmt(format_args!("impl {}", if into_to_from { "From" } else { result.name }))?;
             let impl_for = match parameters.len() {
                 0 => &result.data_type,
                 1 if result.name == "Into" => {
                     collector.write_all(b"<")?;
-                    emit_data_type(collector, &result.data_type)?;
+                    if into_to_from {
+                        emit_data_type(collector, &parameters[0].data_type)?;
+                    } else {
+                        emit_data_type(collector, &result.data_type)?;
+                    }
                     collector.write_all(b">")?;
-                    &parameters[0].data_type
+                    if into_to_from {
+                        &result.data_type
+                    } else {
+                        &parameters[0].data_type
+                    }
                 }
                 1 => &parameters[0].data_type,
                 2 if !matches!(parameters[1].data_type, DataType::MultiVector(_)) => &parameters[0].data_type,
@@ -524,11 +543,17 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
             }
             emit_indentation(collector, indentation + 1)?;
             collector.write_all(b"fn ")?;
-            camel_to_snake_case(collector, result.name)?;
+            camel_to_snake_case(collector, if into_to_from { "From" } else { result.name })?;
             match parameters.len() {
                 0 => collector.write_all(b"() -> Self")?,
                 1 => {
-                    collector.write_fmt(format_args!("({}) -> ", parameters[0].name))?;
+                    if into_to_from {
+                        collector.write_all(b"(value: ");
+                        emit_data_type(collector, &parameters[0].data_type);
+                        collector.write_all(b") -> ")?;
+                    } else {
+                        collector.write_fmt(format_args!("({}) -> ", parameters[0].name))?;
+                    }
                     emit_data_type(collector, &result.data_type)?;
                 }
                 2 => {
@@ -544,7 +569,14 @@ pub fn emit_code<W: std::io::Write>(collector: &mut W, ast_node: &AstNode, inden
                 emit_indentation(collector, indentation + 2)?;
                 if i + 1 == body.len() {
                     if let AstNode::ReturnStatement { expression } = statement {
-                        emit_expression(collector, expression)?;
+                        let mut expression = expression;
+                        if into_to_from {
+                            let mut vec = Vec::new();
+                            emit_expression(&mut vec, expression)?;
+                            collector.write_all(String::from_utf8(vec).unwrap().replace("self", "value").as_bytes());
+                        } else {
+                            emit_expression(collector, expression)?;
+                        }
                         collector.write_all(b"\n")?;
                         break;
                     }
